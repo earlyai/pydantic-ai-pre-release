@@ -450,12 +450,43 @@ def model_metric_attributes(
 def model_request_parameters_attributes(
     model_request_parameters: ModelRequestParameters, *, include_content: bool = True
 ) -> dict[str, AttributeValue]:
-    serialized = _serialize_model_request_parameters(model_request_parameters)
+    serialized = _serialize_model_request_parameters(_redact_native_tool_credentials(model_request_parameters))
     if not include_content:
         serialized = _redact_model_request_parameters(serialized)
         if serialized is None:
             return {}
     return {'model_request_parameters': safe_to_json(serialized).decode()}
+
+
+_REDACTED_CREDENTIAL = '[REDACTED]'
+
+
+def _redact_native_tool_credentials(model_request_parameters: ModelRequestParameters) -> ModelRequestParameters:
+    """Mask the MCP server credentials native tools carry, which must never reach telemetry.
+
+    Unlike prompt text, these are secrets rather than content, so they are masked whatever
+    `include_content` says. The keys stay so it remains visible that a token or header was sent.
+    """
+    from pydantic_ai.native_tools import MCPServerTool
+
+    if not any(
+        isinstance(tool, MCPServerTool) and (tool.authorization_token is not None or tool.headers)
+        for tool in model_request_parameters.native_tools
+    ):
+        return model_request_parameters
+    return replace(
+        model_request_parameters,
+        native_tools=[
+            replace(
+                tool,
+                authorization_token=None if tool.authorization_token is None else _REDACTED_CREDENTIAL,
+                headers=None if tool.headers is None else dict.fromkeys(tool.headers, _REDACTED_CREDENTIAL),
+            )
+            if isinstance(tool, MCPServerTool)
+            else tool
+            for tool in model_request_parameters.native_tools
+        ],
+    )
 
 
 def _redact_model_request_parameters(serialized_parameters: Any) -> dict[str, Any] | None:

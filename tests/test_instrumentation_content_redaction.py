@@ -25,14 +25,22 @@ from opentelemetry.context import Context
 from pydantic import BaseModel
 
 from pydantic_ai import Agent, ModelMessage, ModelRequest, ModelResponse, TextPart, ToolCallPart, UserPromptPart
-from pydantic_ai._instrumentation import ContentPolicy, include_content_ctx, open_request_policy, span_include_content
+from pydantic_ai._instrumentation import (
+    ContentPolicy,
+    include_content_ctx,
+    model_request_parameters_attributes,
+    open_request_policy,
+    span_include_content,
+)
 from pydantic_ai.capabilities import LocalWorkspace
 from pydantic_ai.capabilities.instrumentation import Instrumentation
 from pydantic_ai.exceptions import ModelHTTPError, ModelRetry, ToolFailed, UnexpectedModelBehavior
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.native_tools import MCPServerTool
 from pydantic_ai.output import PromptedOutput
 from pydantic_ai.tools import Tool
 
@@ -377,6 +385,30 @@ async def test_no_content_reaches_telemetry_when_request_parameters_cannot_be_se
     assert bool(exported_parameters) is include_content
 
     check(exporter, include_content, {'user_prompt', 'instructions'})
+
+
+@pytest.mark.parametrize('include_content', [True, False])
+def test_mcp_server_credentials_never_reach_telemetry(include_content: bool) -> None:
+    """MCP server tokens and headers are secrets, not content, so they are masked either way."""
+    tool = MCPServerTool(
+        id='docs',
+        url='https://mcp.example.com',
+        authorization_token='SENTINEL-mcp-token',
+        headers={'X-Api-Key': 'SENTINEL-mcp-header'},
+    )
+    parameters = ModelRequestParameters(native_tools=[tool])
+
+    exported = model_request_parameters_attributes(parameters, include_content=include_content)
+
+    serialized = str(exported['model_request_parameters'])
+    assert 'SENTINEL-mcp-token' not in serialized
+    assert 'SENTINEL-mcp-header' not in serialized
+    assert '"authorization_token":"[REDACTED]"' in serialized
+    assert '"X-Api-Key":"[REDACTED]"' in serialized
+    assert 'https://mcp.example.com' in serialized
+    # The request the model receives keeps its credentials.
+    assert tool.authorization_token == 'SENTINEL-mcp-token'
+    assert tool.headers == {'X-Api-Key': 'SENTINEL-mcp-header'}
 
 
 def test_a_content_policy_from_another_span_is_not_trusted() -> None:
