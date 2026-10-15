@@ -276,6 +276,17 @@ def test_a_choices_set_with_actions_can_be_one_of_several_output_types():
     assert captured == snapshot(['final_result_action', 'final_result_Doc'])
 
 
+def test_a_choices_set_with_actions_can_be_one_of_several_native_output_types():
+    """In a single union output object, picking the set's member still runs the action."""
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart('{"result": {"kind": "action", "data": {"response": "login"}}}')])
+
+    action = Choices({'login': Choice('Click login.', value=lambda: 'clicked login')}, name='action')
+    result = Agent(FunctionModel(respond), output_type=NativeOutput([action, Doc])).run_sync('x')
+    assert result.output == 'clicked login'
+
+
 ACTIONS = Choices({'act': Choice('Do it.', value=lambda: 'acted')})
 
 
