@@ -1368,6 +1368,9 @@ class UnionOutputProcessor(BaseObjectOutputProcessor[OutputDataT]):
         fn_schema = inner._function_schema  # pyright: ignore[reportPrivateUsage]
         if fn_schema is not None and fn_schema.single_field_name is None:
             return isinstance(semantic, dict)
+        if (choice_values := inner._choice_values) is not None:  # pyright: ignore[reportPrivateUsage]
+            # A `Choices` set with callable values is picked by key; `output_type` is the keys' type, not `str`.
+            return isinstance(semantic, str) and semantic in choice_values
         if inner.output_type is None:
             return False  # pragma: no cover
         return _isinstance_maybe_generic(semantic, inner.output_type)
@@ -1389,7 +1392,7 @@ class UnionOutputProcessor(BaseObjectOutputProcessor[OutputDataT]):
             fn_schema = inner._function_schema  # pyright: ignore[reportPrivateUsage]
             if fn_schema is not None and fn_schema.single_field_name is None:
                 continue  # multi-arg — see docstring
-            if _isinstance_maybe_generic(value, inner.output_type):
+            if self._semantic_matches_inner(inner, value):
                 return _UnionValidatedOutput(kind=kind, data=value)
         return None
 
