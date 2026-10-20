@@ -256,11 +256,11 @@ class TestCodeModeReplStore:
 
         assert (store.loads, store.saves) == ([], [])
 
-    async def test_store_errors_do_not_fail_the_run(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_save_error_does_not_fail_the_run(self, caplog: pytest.LogCaptureFixture) -> None:
         @dataclass
         class BrokenStore:
             async def load(self, ctx: RunContext[None]) -> bytes | None:
-                raise OSError('disk unavailable')
+                return None
 
             async def save(self, ctx: RunContext[None], state: bytes | None) -> None:
                 raise OSError('disk full')
@@ -270,8 +270,35 @@ class TestCodeModeReplStore:
         with caplog.at_level(logging.WARNING):
             assert (await agent.run('fresh', conversation_id='c1')).output == '1'
 
-        assert 'could not load the saved REPL state' in caplog.text and 'disk unavailable' in caplog.text
         assert 'could not save the REPL state' in caplog.text and 'disk full' in caplog.text
+
+    async def test_load_error_keeps_the_stored_state(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A run whose `load` failed starts fresh, and does not save its fresh REPL over the stored state."""
+
+        @dataclass
+        class FlakyStore(MemoryReplStore):
+            failing: bool = False
+
+            async def load(self, ctx: RunContext[None]) -> bytes | None:
+                if self.failing:
+                    raise OSError('disk unavailable')
+                return await super().load(ctx)
+
+        store = FlakyStore()
+        scripts = {**SCRIPTS, 'fresh': {'code': 'y = 1\ny'}}
+        agent = agent_with(store, scripts)
+        await agent.run('set', conversation_id='c1')
+        saved = store.states['c1']
+
+        store.failing = True
+        with caplog.at_level(logging.WARNING):
+            assert (await agent.run('fresh', conversation_id='c1')).output == '1'
+
+        assert 'could not load the saved REPL state' in caplog.text and 'disk unavailable' in caplog.text
+        assert store.saves == [('c1', True)]
+        assert store.states['c1'] == saved
+        store.failing = False
+        assert (await agent.run('get', conversation_id='c1')).output == '42'
 
     async def test_a_save_past_the_timeout_is_abandoned(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
