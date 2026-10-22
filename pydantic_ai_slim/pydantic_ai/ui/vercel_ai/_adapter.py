@@ -134,7 +134,11 @@ _KIND_TO_URL_TYPE: dict[str, type[ImageUrl | AudioUrl | VideoUrl | DocumentUrl]]
 
 
 def _generate_message_id(
-    msg: ModelRequest | ModelResponse, role: Literal['system', 'user', 'assistant'], message_index: int
+    msg: ModelRequest | ModelResponse,
+    role: Literal['system', 'user', 'assistant'],
+    message_index: int,
+    *,
+    use_ui_message_id: bool = True,
 ) -> str:
     """Return the `UIMessage.id` the message was loaded from, else a deterministic ID from content and position.
 
@@ -143,8 +147,11 @@ def _generate_message_id(
     2. For `ModelResponse` with `provider_response_id` set, use '{provider_response_id}-{message_index}'.
     3. For any message with run_id set, use '{run_id}-{message_index}'.
     4. Fallback: UUID5 from 'timestamp-kind-role-message_index'.
+
+    `use_ui_message_id=False` skips step 1, for the leading system `UIMessage` of a split request whose
+    kept id belongs to the trailing user `UIMessage`.
     """
-    if (ui_message_id := get_ui_message_id(msg)) is not None:
+    if use_ui_message_id and (ui_message_id := get_ui_message_id(msg)) is not None:
         return ui_message_id
     if isinstance(msg, ModelResponse) and msg.provider_response_id:
         return f'{msg.provider_response_id}-{message_index}'
@@ -1055,9 +1062,16 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
                 # applies it once to the merged ModelRequest.
                 request_metadata = dump_message_metadata(msg) or None
                 if system_ui_parts:
+                    # The kept `UIMessage.id` goes on the trailing user UIMessage of a split request,
+                    # so the system one gets a generated id rather than a duplicate.
+                    system_id = (
+                        _generate_message_id(msg, 'system', message_index, use_ui_message_id=False)
+                        if generate_message_id is None and user_ui_parts
+                        else id_generator(msg, 'system', message_index)
+                    )
                     result.append(
                         UIMessage(
-                            id=id_generator(msg, 'system', message_index),
+                            id=system_id,
                             role='system',
                             metadata=None if user_ui_parts else request_metadata,
                             parts=system_ui_parts,
